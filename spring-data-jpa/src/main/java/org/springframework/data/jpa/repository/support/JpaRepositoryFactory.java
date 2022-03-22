@@ -17,13 +17,13 @@ package org.springframework.data.jpa.repository.support;
 
 import static org.springframework.data.querydsl.QuerydslUtils.*;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Tuple;
+
 import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.util.Optional;
 import java.util.stream.Stream;
-
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.Tuple;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -33,13 +33,7 @@ import org.springframework.data.jpa.projection.CollectionAwareProjectionFactory;
 import org.springframework.data.jpa.provider.PersistenceProvider;
 import org.springframework.data.jpa.provider.QueryExtractor;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.query.AbstractJpaQuery;
-import org.springframework.data.jpa.repository.query.DefaultJpaQueryMethodFactory;
-import org.springframework.data.jpa.repository.query.EscapeCharacter;
-import org.springframework.data.jpa.repository.query.JpaQueryLookupStrategy;
-import org.springframework.data.jpa.repository.query.JpaQueryMethod;
-import org.springframework.data.jpa.repository.query.JpaQueryMethodFactory;
-import org.springframework.data.jpa.repository.query.Procedure;
+import org.springframework.data.jpa.repository.query.*;
 import org.springframework.data.jpa.util.JpaMetamodel;
 import org.springframework.data.projection.ProjectionFactory;
 import org.springframework.data.querydsl.EntityPathResolver;
@@ -82,6 +76,7 @@ public class JpaRepositoryFactory extends RepositoryFactorySupport {
 	private EntityPathResolver entityPathResolver;
 	private EscapeCharacter escapeCharacter = EscapeCharacter.DEFAULT;
 	private JpaQueryMethodFactory queryMethodFactory;
+	private QueryRewriterProvider queryRewriterProvider;
 
 	/**
 	 * Creates a new {@link JpaRepositoryFactory}.
@@ -97,6 +92,12 @@ public class JpaRepositoryFactory extends RepositoryFactorySupport {
 		this.crudMethodMetadataPostProcessor = new CrudMethodMetadataPostProcessor();
 		this.entityPathResolver = SimpleEntityPathResolver.INSTANCE;
 		this.queryMethodFactory = new DefaultJpaQueryMethodFactory(extractor);
+
+		/**
+		 * Default to {@link QueryRewriterNoopProvider}. If there is a {@link BeanFactory} or {@link BeanManager}, this will
+		 * result in later overriding this with the proper version.
+		 */
+		this.queryRewriterProvider = new QueryRewriterNoopProvider();
 
 		addRepositoryProxyPostProcessor(crudMethodMetadataPostProcessor);
 		addRepositoryProxyPostProcessor((factory, repositoryInformation) -> {
@@ -151,6 +152,17 @@ public class JpaRepositoryFactory extends RepositoryFactorySupport {
 		this.queryMethodFactory = queryMethodFactory;
 	}
 
+	/**
+	 * Configures the {@link QueryRewriterProvider} to be used. Defaults to {@link QueryRewriterNoopProvider}.
+	 *
+	 * @param queryRewriterProvider must not be {@literal null}
+	 */
+	public void setQueryRewriterProvider(QueryRewriterProvider queryRewriterProvider) {
+
+		Assert.notNull(queryRewriterProvider, "QueryRewriterProvider must not be null!");
+		this.queryRewriterProvider = queryRewriterProvider;
+	}
+
 	@Override
 	protected final JpaRepositoryImplementation<?, ?> getTargetRepository(RepositoryInformation information) {
 
@@ -198,8 +210,12 @@ public class JpaRepositoryFactory extends RepositoryFactorySupport {
 	protected Optional<QueryLookupStrategy> getQueryLookupStrategy(@Nullable Key key,
 			QueryMethodEvaluationContextProvider evaluationContextProvider) {
 
+		if (getBeanFactory() != null) {
+			queryRewriterProvider = new QueryRewriterBeanFactoryProvider(getBeanFactory());
+		}
+
 		return Optional.of(JpaQueryLookupStrategy.create(entityManager, queryMethodFactory, key, evaluationContextProvider,
-				escapeCharacter));
+				queryRewriterProvider, escapeCharacter));
 	}
 
 	@Override
